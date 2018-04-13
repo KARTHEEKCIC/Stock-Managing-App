@@ -3,22 +3,23 @@ package com.example.android.autonomistock;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.annotation.TargetApi;
-import android.content.pm.PackageManager;
-import android.support.annotation.NonNull;
-import android.support.design.widget.Snackbar;
-import android.support.v7.app.AppCompatActivity;
 import android.app.LoaderManager.LoaderCallbacks;
-
+import android.content.Context;
 import android.content.CursorLoader;
+import android.content.Intent;
 import android.content.Loader;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.AsyncTask;
-
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
+import android.support.annotation.NonNull;
+import android.support.design.widget.Snackbar;
+import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -28,6 +29,30 @@ import android.widget.AutoCompleteTextView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import com.alimuzaffar.lib.pin.PinEntryEditText;
+import com.amazonaws.ClientConfiguration;
+import com.amazonaws.auth.AnonymousAWSCredentials;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoDevice;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUser;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserAttributes;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserCodeDeliveryDetails;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserPool;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserSession;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.continuations.AuthenticationContinuation;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.continuations.AuthenticationDetails;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.continuations.ChallengeContinuation;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.continuations.MultiFactorAuthenticationContinuation;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.handlers.AuthenticationHandler;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.handlers.GenericHandler;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.handlers.VerificationHandler;
+import com.amazonaws.regions.Region;
+import com.amazonaws.regions.Regions;
+import com.amazonaws.services.cognitoidentityprovider.AmazonCognitoIdentityProviderClient;
+import com.amazonaws.services.cognitoidentityprovider.model.CodeMismatchException;
+import com.amazonaws.services.cognitoidentityprovider.model.UserNotConfirmedException;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,28 +68,51 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
      */
     private static final int REQUEST_READ_CONTACTS = 0;
 
-    /**
-     * A dummy authentication store containing known user names and passwords.
-     * TODO: remove after connecting to a real authentication system.
-     */
-    private static final String[] DUMMY_CREDENTIALS = new String[]{
-            "foo@example.com:hello", "bar@example.com:world"
-    };
-    /**
-     * Keep track of the login task to ensure we can cancel it if requested.
-     */
-    private UserLoginTask mAuthTask = null;
-
     // UI references.
     private AutoCompleteTextView mEmailView;
     private EditText mPasswordView;
     private View mProgressView;
     private View mLoginFormView;
 
+    // for aws web services
+    private CognitoUserPool userPool;
+    private CognitoUserAttributes userAttributes;
+    private String clientId = "1ki0dem2n9h71fjj3mj047nkdp";
+    private String clientSecret = "n4jm2ipcnffc1ds7camgc3ck12pj107e83v0il6i9puvgsfllrg";
+    private String poolId = "ap-south-1_ZYrq6thxG";
+
+    // Cognito User object representing a user in the user pool
+    CognitoUser mCognitoUser;
+
+    // Confirmation code sent to the email
+    String confirmationCode;
+
+    // to avoid any alias already existing in the api from being confirmed
+    boolean forcedAliasCreation = false;
+
+    //MFA Verification code for aws
+    String mfaVerificationCode = "00000";
+
+    // User's Login Credentials
+    private String email;
+    private String password;
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_login);
+
+        // Client configuration for aws services
+        ClientConfiguration clientConfiguration = new ClientConfiguration();
+
+        AmazonCognitoIdentityProviderClient identityProviderClient = new AmazonCognitoIdentityProviderClient(new AnonymousAWSCredentials(), new ClientConfiguration());
+        identityProviderClient.setRegion(Region.getRegion(Regions.AP_SOUTH_1));
+
+        // object for the user pool access with id given above
+        userPool = new CognitoUserPool(getApplicationContext(), poolId, clientId, clientSecret, identityProviderClient);
+
+        mCognitoUser = userPool.getUser();
+
         // Set up the login form.
         mEmailView = (AutoCompleteTextView) findViewById(R.id.email);
         populateAutoComplete();
@@ -146,17 +194,14 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
      * errors are presented and no actual login attempt is made.
      */
     private void attemptLogin() {
-        if (mAuthTask != null) {
-            return;
-        }
 
         // Reset errors.
         mEmailView.setError(null);
         mPasswordView.setError(null);
 
         // Store values at the time of the login attempt.
-        String email = mEmailView.getText().toString();
-        String password = mPasswordView.getText().toString();
+        email = mEmailView.getText().toString();
+        password = mPasswordView.getText().toString();
 
         boolean cancel = false;
         View focusView = null;
@@ -164,6 +209,11 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
         // Check for a valid password, if the user entered one.
         if (!TextUtils.isEmpty(password) && !isPasswordValid(password)) {
             mPasswordView.setError(getString(R.string.error_invalid_password));
+            focusView = mPasswordView;
+            cancel = true;
+        } else if(!checkPasswordConstraints(password)) {
+            mPasswordView.setError("Password should contain an lower case character, uppercase character" +
+                    ", number and special character");
             focusView = mPasswordView;
             cancel = true;
         }
@@ -187,8 +237,8 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
             // Show a progress spinner, and kick off a background task to
             // perform the user login attempt.
             showProgress(true);
-            mAuthTask = new UserLoginTask(email, password);
-            mAuthTask.execute((Void) null);
+            // Sign in the user
+            mCognitoUser.getSessionInBackground(authenticationHandler);
         }
     }
     private boolean isEmailValid(String email) {
@@ -199,6 +249,14 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
     private boolean isPasswordValid(String password) {
         //TODO: Replace this with your own logic
         return password.length() > 4;
+    }
+
+    // check whether the password is according the constraints
+    private boolean checkPasswordConstraints(String password) {
+        if(password.matches("^[a-zA-Z0-9!@#$&()\\\\-`.+,/\\\"]*$")) {
+            return true;
+        }
+        return false;
     }
 
     /**
@@ -291,61 +349,119 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
         mEmailView.setAdapter(adapter);
     }
 
-    /**
-     * Represents an asynchronous login/registration task used to authenticate
-     * the user.
-     */
-    public class UserLoginTask extends AsyncTask<Void, Void, Boolean> {
+    // Callback handler for confirmSignUp API
+    GenericHandler confirmationCallback = new GenericHandler() {
 
-        private final String mEmail;
-        private final String mPassword;
+        @Override
+        public void onSuccess() {
+            // User was successfully confirmed
+            // Now the save the status that the user has logged in
+            SharedPreferences sharedPreferences = getApplicationContext().
+                    getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putBoolean("loggedIn",true);
 
-        UserLoginTask(String email, String password) {
-            mEmail = email;
-            mPassword = password;
+            // Now go the Student Main Page
+            Intent StudentMainActivity = new Intent(getApplicationContext(),
+                    com.example.android.autonomistock.StudentMainActivity.class);
+            if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
+                startActivity(StudentMainActivity);
+            }
         }
 
         @Override
-        protected Boolean doInBackground(Void... params) {
-            // TODO: attempt authentication against a network service.
-
-            try {
-                // Simulate network access.
-                Thread.sleep(2000);
-            } catch (InterruptedException e) {
-                return false;
-            }
-
-            for (String credential : DUMMY_CREDENTIALS) {
-                String[] pieces = credential.split(":");
-                if (pieces[0].equals(mEmail)) {
-                    // Account exists, return true if the password matches.
-                    return pieces[1].equals(mPassword);
-                }
-            }
-
-            // TODO: register the new account here.
-            return true;
-        }
-
-        @Override
-        protected void onPostExecute(final Boolean success) {
-            mAuthTask = null;
-            showProgress(false);
-
-            if (success) {
-                finish();
+        public void onFailure(Exception exception) {
+            // User confirmation failed. Check exception for the cause.
+            Log.e("RegisterActivity.class","Failed to confirm with exception - " + exception);
+            if(exception.getClass() == CodeMismatchException.class) {
+                // Inform the user that the code entered is incorrect
+                Toast.makeText(getApplicationContext(),"Incorrect Code. Please enter the correct code",Toast.LENGTH_LONG).show();
             } else {
-                mPasswordView.setError(getString(R.string.error_incorrect_password));
-                mPasswordView.requestFocus();
+                Toast.makeText(getApplicationContext(),"Some Network Error. Please Try after some time",Toast.LENGTH_LONG).show();
+            }
+        }
+    };
+
+
+    // Callback handler for the sign-in process
+    AuthenticationHandler authenticationHandler = new AuthenticationHandler() {
+
+        @Override
+        public void onSuccess(CognitoUserSession userSession, CognitoDevice newDevice) {
+            Log.e("LoginActivity.class", "Login Successfull");
+            Intent StudentMainActivity = new Intent(getApplicationContext(), com.example.android.autonomistock.StudentMainActivity.class);
+            if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
+                startActivity(StudentMainActivity);
             }
         }
 
         @Override
-        protected void onCancelled() {
-            mAuthTask = null;
-            showProgress(false);
+        public void getAuthenticationDetails(AuthenticationContinuation authenticationContinuation, String userId) {
+            // The API needs user sign-in credentials to continue
+            AuthenticationDetails authenticationDetails = new AuthenticationDetails(email, password, null);
+
+            // Pass the user sign-in credentials to the continuation
+            authenticationContinuation.setAuthenticationDetails(authenticationDetails);
+
+            // Allow the sign-in to continue
+            authenticationContinuation.continueTask();
         }
-    }
+
+        @Override
+        public void getMFACode(MultiFactorAuthenticationContinuation multiFactorAuthenticationContinuation) {
+            Log.e("LoginActivity.class","GetMFACode called");
+            // Multi-factor authentication is required; get the verification code from user
+            multiFactorAuthenticationContinuation.setMfaCode(mfaVerificationCode);
+            // Allow the sign-in process to continue
+            multiFactorAuthenticationContinuation.continueTask();
+        }
+
+        @Override
+        public void authenticationChallenge(ChallengeContinuation continuation) {
+
+        }
+
+        @Override
+        public void onFailure(Exception exception) {
+            // Sign-in failed, check exception for the cause
+            Log.e("LoginActivity.class","Login Failed - " + exception);
+
+            if(exception.getClass() == UserNotConfirmedException.class) {
+
+                VerificationHandler mVerificationHandler = new VerificationHandler() {
+                    @Override
+                    public void onSuccess(CognitoUserCodeDeliveryDetails verificationCodeDeliveryMedium) {
+                        Log.e("LoginActivity.class","Verification Code Sent Successfully");
+                        setContentView(R.layout.activity_verification);
+
+                        // PIN Edit Text
+                        PinEntryEditText verificationPin;
+
+                        verificationPin = (PinEntryEditText) findViewById(R.id.txt_pin_entry);
+                        // Set listener to get the verification code from user
+                        verificationPin.setOnPinEnteredListener(new PinEntryEditText.OnPinEnteredListener() {
+                            @Override
+                            public void onPinEntered(CharSequence str) {
+                                confirmationCode = str.toString();
+                                // Call API to confirm this user
+                                userPool.getUser(email).confirmSignUpInBackground(confirmationCode,forcedAliasCreation,confirmationCallback);
+                            }
+                        });
+
+
+                    }
+
+                    @Override
+                    public void onFailure(Exception exception) {
+                        Log.e("LoginActivity.class","Some Network Error - " + exception);
+                    }
+                };
+
+                userPool.getUser(email).resendConfirmationCodeInBackground(mVerificationHandler);
+            }
+
+        }
+    };
+
 }
 

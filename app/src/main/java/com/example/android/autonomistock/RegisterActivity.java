@@ -3,22 +3,23 @@ package com.example.android.autonomistock;
 import android.animation.Animator;
 import android.animation.AnimatorListenerAdapter;
 import android.annotation.TargetApi;
-import android.content.pm.PackageManager;
-import android.support.annotation.NonNull;
-import android.support.design.widget.Snackbar;
-import android.support.v7.app.AppCompatActivity;
 import android.app.LoaderManager.LoaderCallbacks;
-
+import android.content.Context;
 import android.content.CursorLoader;
+import android.content.Intent;
 import android.content.Loader;
+import android.content.SharedPreferences;
+import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
-import android.os.AsyncTask;
-
 import android.os.Build;
 import android.os.Bundle;
 import android.provider.ContactsContract;
+import android.support.annotation.NonNull;
+import android.support.design.widget.Snackbar;
+import android.support.v7.app.AppCompatActivity;
 import android.text.TextUtils;
+import android.util.Log;
 import android.view.KeyEvent;
 import android.view.View;
 import android.view.View.OnClickListener;
@@ -28,6 +29,21 @@ import android.widget.AutoCompleteTextView;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.TextView;
+import android.widget.Toast;
+
+import com.alimuzaffar.lib.pin.PinEntryEditText;
+import com.amazonaws.ClientConfiguration;
+import com.amazonaws.auth.AnonymousAWSCredentials;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUser;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserAttributes;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserCodeDeliveryDetails;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.CognitoUserPool;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.handlers.GenericHandler;
+import com.amazonaws.mobileconnectors.cognitoidentityprovider.handlers.SignUpHandler;
+import com.amazonaws.regions.Region;
+import com.amazonaws.regions.Regions;
+import com.amazonaws.services.cognitoidentityprovider.AmazonCognitoIdentityProviderClient;
+import com.amazonaws.services.cognitoidentityprovider.model.CodeMismatchException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -44,32 +60,48 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
      */
     private static final int REQUEST_READ_CONTACTS = 0;
 
-    /**
-     * A dummy authentication store containing known user names and passwords.
-     * TODO: remove after connecting to a real authentication system.
-     */
-    private static final String[] DUMMY_CREDENTIALS = new String[]{
-            "foo@example.com:hello", "bar@example.com:world"
-    };
-    /**
-     * Keep track of the login task to ensure we can cancel it if requested.
-     */
-    private UserLoginTask mAuthTask = null;
-
     // UI references.
     private AutoCompleteTextView mEmailView;
     private EditText mPasswordView;
+    private EditText mNameView;
+    private EditText mRollNoView;
     private View mProgressView;
     private View mLoginFormView;
-    private View mNameView;
+
+    // for aws web services
+    private CognitoUserPool userPool;
+    private CognitoUserAttributes userAttributes;
+    private String clientId = "1ki0dem2n9h71fjj3mj047nkdp";
+    private String clientSecret = "n4jm2ipcnffc1ds7camgc3ck12pj107e83v0il6i9puvgsfllrg";
+    private String poolId = "ap-south-1_ZYrq6thxG";
+
+    // User verification code
+    String confirmationCode;
+    // to avoid any alias already existing in the api from being confirmed
+    boolean forcedAliasCreation = false;
+
+    // Cognito User object representing a user from user pool
+    CognitoUser mCognitoUser;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_register);
+
+        // Client configuration for aws services
+        ClientConfiguration clientConfiguration = new ClientConfiguration();
+
+        AmazonCognitoIdentityProviderClient identityProviderClient = new AmazonCognitoIdentityProviderClient(new AnonymousAWSCredentials(), new ClientConfiguration());
+        identityProviderClient.setRegion(Region.getRegion(Regions.AP_SOUTH_1));
+
+        // object for the user pool access with id given above
+        userPool = new CognitoUserPool(getApplicationContext(), poolId, clientId, clientSecret, identityProviderClient);
+
         // Set up the login form.
         mEmailView = (AutoCompleteTextView) findViewById(R.id.email);
         mNameView = (EditText) findViewById(R.id.name);
+        mRollNoView = (EditText) findViewById(R.id.rollNo);
+
         populateAutoComplete();
 
         mPasswordView = (EditText) findViewById(R.id.password);
@@ -149,9 +181,6 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
      * errors are presented and no actual login attempt is made.
      */
     private void attemptLogin() {
-        if (mAuthTask != null) {
-            return;
-        }
 
         // Reset errors.
         mEmailView.setError(null);
@@ -160,6 +189,8 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
         // Store values at the time of the login attempt.
         String email = mEmailView.getText().toString();
         String password = mPasswordView.getText().toString();
+        String name = mNameView.getText().toString();
+        String RollNo = mRollNoView.getText().toString();
 
         boolean cancel = false;
         View focusView = null;
@@ -167,6 +198,11 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
         // Check for a valid password, if the user entered one.
         if (!TextUtils.isEmpty(password) && !isPasswordValid(password)) {
             mPasswordView.setError(getString(R.string.error_invalid_password));
+            focusView = mPasswordView;
+            cancel = true;
+        } else if(!checkPasswordConstraints(password)) {
+            mPasswordView.setError("Password should contain an lower case character, uppercase character" +
+                    ", number and special character");
             focusView = mPasswordView;
             cancel = true;
         }
@@ -182,6 +218,24 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
             cancel = true;
         }
 
+        // check the roll no
+        if(TextUtils.isEmpty(RollNo)) {
+            mRollNoView.setError("This field is required");
+            focusView = mRollNoView;
+            cancel = true;
+        } else if(RollNo.length() != 5) {
+            mRollNoView.setError("Incorrect Roll No");
+            focusView = mRollNoView;
+            cancel = true;
+        }
+
+        // check is name field is empty
+        if(TextUtils.isEmpty(name)) {
+            mNameView.setError("This field is required");
+            focusView = mNameView;
+            cancel = true;
+        }
+
         if (cancel) {
             // There was an error; don't attempt login and focus the first
             // form field with an error.
@@ -190,10 +244,98 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
             // Show a progress spinner, and kick off a background task to
             // perform the user login attempt.
             showProgress(true);
-            mAuthTask = new UserLoginTask(email, password);
-            mAuthTask.execute((Void) null);
+
+            userAttributes = new CognitoUserAttributes();
+            userAttributes.addAttribute("email", email);
+            userAttributes.addAttribute("locale", RollNo);
+            userAttributes.addAttribute("name", name);
+
+            Log.e("RegisterActivity.class","calling the api");
+            userPool.signUpInBackground(email, password, userAttributes, null, signupCallback);
         }
     }
+
+    // Callback handler for confirmSignUp API
+    GenericHandler confirmationCallback = new GenericHandler() {
+
+        @Override
+        public void onSuccess() {
+            // User was successfully confirmed
+            // Now the save the status that the user has logged in
+            SharedPreferences sharedPreferences = getApplicationContext().
+                    getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putBoolean("loggedIn",true);
+
+            // Now go the Student Main Page
+            Intent StudentMainActivity = new Intent(getApplicationContext(), com.example.android.autonomistock.StudentMainActivity.class);
+            if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
+                startActivity(StudentMainActivity);
+            }
+        }
+
+        @Override
+        public void onFailure(Exception exception) {
+            // User confirmation failed. Check exception for the cause.
+            Log.e("RegisterActivity.class","Failed to confirm with exception - " + exception);
+            if(exception.getClass() == CodeMismatchException.class) {
+                // Inform the user that the code entered is incorrect
+                Toast.makeText(getApplicationContext(),"Incorrect Code. Please enter the correct code",Toast.LENGTH_LONG).show();
+            } else {
+                Toast.makeText(getApplicationContext(),"Some Network Error. Please Try after some time",Toast.LENGTH_LONG).show();
+            }
+        }
+    };
+
+
+    SignUpHandler signupCallback = new SignUpHandler() {
+
+        @Override
+        public void onSuccess(CognitoUser cognitoUser, boolean userConfirmed, CognitoUserCodeDeliveryDetails cognitoUserCodeDeliveryDetails) {
+            // Sign-up was successful
+            mCognitoUser = cognitoUser;
+            // Check if this user (cognitoUser) needs to be confirmed
+            if(!userConfirmed) {
+                // This user must be confirmed and a confirmation code was sent to the user
+                // cognitoUserCodeDeliveryDetails will indicate where the confirmation code was sent
+
+                Log.e("RegisterActivity.class","Enter the confirmation code");
+                Toast.makeText(getApplicationContext(),"Enter the confirmation code",Toast.LENGTH_SHORT).show();
+
+                // Verify the user
+                // set the layout for taking verification code as input from the user
+                setContentView(R.layout.activity_verification);
+                // PIN Edit Text
+                PinEntryEditText verificationPin;
+
+                verificationPin = (PinEntryEditText) findViewById(R.id.txt_pin_entry);
+                // Set listener to get the verification code from user
+                verificationPin.setOnPinEnteredListener(new PinEntryEditText.OnPinEnteredListener() {
+                    @Override
+                    public void onPinEntered(CharSequence str) {
+                        confirmationCode = str.toString();
+                        // Call API to confirm this user
+                        mCognitoUser.confirmSignUpInBackground(confirmationCode, forcedAliasCreation, confirmationCallback);
+                    }
+                });
+            }
+            else {
+                Log.e("RegisterActivity.class","User logged in successfully");
+                // The user has already been confirmed
+                // Move to the main screen
+                Intent StudentMainActivity = new Intent(getApplicationContext(),StudentMainActivity.class);
+                if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
+                    startActivity(StudentMainActivity);
+                }
+            }
+        }
+
+        @Override
+        public void onFailure(Exception exception) {
+            // Sign-up failed, check exception for the cause
+            Log.e("RegisterActivity.class","Sign Up Failed" + exception);
+        }
+    };
 
     private boolean isEmailValid(String email) {
         //TODO: Replace this with your own logic
@@ -204,6 +346,15 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
         //TODO: Replace this with your own logic
         return password.length() > 4;
     }
+
+    // check whether the password is according the constraints
+    private boolean checkPasswordConstraints(String password) {
+        if(password.matches("^[a-zA-Z0-9!@#$&()\\\\-`.+,/\\\"]*$")) {
+            return true;
+        }
+        return false;
+    }
+
 
     /**
      * Shows the progress UI and hides the login form.
@@ -295,61 +446,5 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
         int IS_PRIMARY = 1;
     }
 
-    /**
-     * Represents an asynchronous login/registration task used to authenticate
-     * the user.
-     */
-    public class UserLoginTask extends AsyncTask<Void, Void, Boolean> {
-
-        private final String mEmail;
-        private final String mPassword;
-
-        UserLoginTask(String email, String password) {
-            mEmail = email;
-            mPassword = password;
-        }
-
-        @Override
-        protected Boolean doInBackground(Void... params) {
-            // TODO: attempt authentication against a network service.
-
-            try {
-                // Simulate network access.
-                Thread.sleep(2000);
-            } catch (InterruptedException e) {
-                return false;
-            }
-
-            for (String credential : DUMMY_CREDENTIALS) {
-                String[] pieces = credential.split(":");
-                if (pieces[0].equals(mEmail)) {
-                    // Account exists, return true if the password matches.
-                    return pieces[1].equals(mPassword);
-                }
-            }
-
-            // TODO: register the new account here.
-            return true;
-        }
-
-        @Override
-        protected void onPostExecute(final Boolean success) {
-            mAuthTask = null;
-            showProgress(false);
-
-            if (success) {
-                finish();
-            } else {
-                mPasswordView.setError(getString(R.string.error_incorrect_password));
-                mPasswordView.requestFocus();
-            }
-        }
-
-        @Override
-        protected void onCancelled() {
-            mAuthTask = null;
-            showProgress(false);
-        }
-    }
 }
 

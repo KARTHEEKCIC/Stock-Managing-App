@@ -21,4 +21,7 @@
     <string name="Autonomi">Autonomi</string>
     <string name="prompt_name">Name</string>
     <string name="prompt_rollNo">Roll No</string>
+    <string name="verifyEmailText">Enter the verification code sent to your registered email</string>
+    <string name="password_spec">Password must be 8 characters long. It must contain an uppercase character, a lowercase character, a number and a special character.</string>
+    <string name="login_status">Login Status</string>
 </resources>
