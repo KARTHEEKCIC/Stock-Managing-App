@@ -24,4 +24,14 @@
     <string name="verifyEmailText">Enter the verification code sent to your registered email</string>
     <string name="password_spec">Password must be 8 characters long. It must contain an uppercase character, a lowercase character, a number and a special character.</string>
     <string name="login_status">Login Status</string>
+    <string name="settings">Settings</string>
+    <string name="cart">Cart</string>
+    <string name="catalogue">Catalogue</string>
+    <string name="cart_statet">Cart</string>
+    <string name="logout">Logout</string>
+    <string name="no_items_in_your_cart">No Items in your cart</string>
+    <string name="issues">Issues</string>
+    <string name="issue_requests">You have no issue requests</string>
+    <string name="register">Register</string>
+    <string name="login">Login</string>
 </resources>

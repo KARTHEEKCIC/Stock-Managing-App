@@ -51,7 +51,9 @@ import com.amazonaws.regions.Region;
 import com.amazonaws.regions.Regions;
 import com.amazonaws.services.cognitoidentityprovider.AmazonCognitoIdentityProviderClient;
 import com.amazonaws.services.cognitoidentityprovider.model.CodeMismatchException;
+import com.amazonaws.services.cognitoidentityprovider.model.NotAuthorizedException;
 import com.amazonaws.services.cognitoidentityprovider.model.UserNotConfirmedException;
+import com.amazonaws.services.cognitoidentityprovider.model.UserNotFoundException;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -359,7 +361,9 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
             SharedPreferences sharedPreferences = getApplicationContext().
                     getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
             SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putString("userEmail", email);
             editor.putBoolean("loggedIn",true);
+            editor.commit();
 
             // Now go the Student Main Page
             Intent StudentMainActivity = new Intent(getApplicationContext(),
@@ -389,6 +393,16 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
         @Override
         public void onSuccess(CognitoUserSession userSession, CognitoDevice newDevice) {
             Log.e("LoginActivity.class", "Login Successfull");
+
+            // Now the save the status that the user has logged in
+            Log.e("LoginActivity","Setting the login status");
+            SharedPreferences sharedPreferences = getApplicationContext().
+                    getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
+            SharedPreferences.Editor editor = sharedPreferences.edit();
+            editor.putBoolean("loggedIn",true);
+            editor.putString("userEmail",email);
+            editor.commit();
+
             Intent StudentMainActivity = new Intent(getApplicationContext(), com.example.android.autonomistock.StudentMainActivity.class);
             if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
                 startActivity(StudentMainActivity);
@@ -426,6 +440,7 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
             // Sign-in failed, check exception for the cause
             Log.e("LoginActivity.class","Login Failed - " + exception);
 
+            // check whether the user is confirmed or not
             if(exception.getClass() == UserNotConfirmedException.class) {
 
                 VerificationHandler mVerificationHandler = new VerificationHandler() {
@@ -458,6 +473,12 @@ public class LoginActivity extends AppCompatActivity implements LoaderCallbacks<
                 };
 
                 userPool.getUser(email).resendConfirmationCodeInBackground(mVerificationHandler);
+            } else if (exception.getClass() == UserNotFoundException.class) {
+                showProgress(false);
+                Toast.makeText(getApplicationContext(),"User does not exist",Toast.LENGTH_SHORT).show();
+            } else if (exception.getClass() == NotAuthorizedException.class) {
+                showProgress(false);
+                Toast.makeText(getApplicationContext(),"Incorrect Password",Toast.LENGTH_SHORT).show();
             }
 
         }

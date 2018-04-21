@@ -68,6 +68,8 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
     private View mProgressView;
     private View mLoginFormView;
 
+    private String email;
+
     // for aws web services
     private CognitoUserPool userPool;
     private CognitoUserAttributes userAttributes;
@@ -187,7 +189,7 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
         mPasswordView.setError(null);
 
         // Store values at the time of the login attempt.
-        String email = mEmailView.getText().toString();
+        email = mEmailView.getText().toString();
         String password = mPasswordView.getText().toString();
         String name = mNameView.getText().toString();
         String RollNo = mRollNoView.getText().toString();
@@ -266,6 +268,8 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
                     getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
             SharedPreferences.Editor editor = sharedPreferences.edit();
             editor.putBoolean("loggedIn",true);
+            editor.putString("userEmail",email);
+            editor.commit();
 
             // Now go the Student Main Page
             Intent StudentMainActivity = new Intent(getApplicationContext(), com.example.android.autonomistock.StudentMainActivity.class);
@@ -322,6 +326,15 @@ public class RegisterActivity extends AppCompatActivity implements LoaderCallbac
             else {
                 Log.e("RegisterActivity.class","User logged in successfully");
                 // The user has already been confirmed
+
+                // Now the save the status that the user has logged in
+                SharedPreferences sharedPreferences = getApplicationContext().
+                        getSharedPreferences(getString(R.string.login_status), Context.MODE_PRIVATE);
+                SharedPreferences.Editor editor = sharedPreferences.edit();
+                editor.putBoolean("loggedIn",true);
+                editor.putString("userEmail",email);
+                editor.commit();
+
                 // Move to the main screen
                 Intent StudentMainActivity = new Intent(getApplicationContext(),StudentMainActivity.class);
                 if (StudentMainActivity.resolveActivity(getPackageManager()) != null) {
